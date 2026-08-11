@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -19,6 +20,28 @@ from .workers.watcher import Watcher
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("sylu")
 
+
+class _SensitiveFormatter(logging.Formatter):
+    """开发日志（计划 §23）：记录 endpoint/response/selector/exception，
+    但 Cookie/token 等敏感值一律打码。"""
+
+    _SENSITIVE = re.compile(
+        r"(?i)(jsessionid|cookie|token|authorization)\s*[=:]\s*[^\s;\"']+"
+    )
+
+    def format(self, record: logging.LogRecord) -> str:
+        msg = record.getMessage()
+        record.msg = self._SENSITIVE.sub(r"\1=***", msg)
+        return super().format(record)
+
+
+def _setup_debug_log(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(path, encoding="utf-8")
+    handler.setFormatter(_SensitiveFormatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    logging.getLogger().addHandler(handler)
+
+
 _ROOT = Path(__file__).resolve().parent.parent.parent
 
 
@@ -30,6 +53,7 @@ def create_app(state: AppState | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        _setup_debug_log(_ROOT / "logs" / "debug.log")
         await state.init()
         # 从设置读取监测间隔（计划 §30）
         try:
@@ -69,16 +93,16 @@ def create_app(state: AppState | None = None) -> FastAPI:
     app.include_router(settings.router)
     app.include_router(websocket.router)
 
-    # 前端构建产物（Phase 6 之后存在）
+    @app.get("/api/health")
+    async def health() -> dict:
+        return {"ok": True, "version": "3.0.0"}
+
+    # 前端构建产物（Phase 6 之后存在）；放在所有 API 路由之后挂载，避免遮蔽 /api
     dist = _ROOT / "frontend" / "dist"
     if dist.exists():
         from fastapi.staticfiles import StaticFiles
 
         app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
-
-    @app.get("/api/health")
-    async def health() -> dict:
-        return {"ok": True, "version": "3.0.0"}
 
     return app
 
