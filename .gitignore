@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime data
+data/*.db
+logs/
+browser_profile/
+config.json
+
+# Frontend
+node_modules/
+frontend/dist/
+
+# IDE / misc
+.idea/
+.vscode/
+.DS_Store

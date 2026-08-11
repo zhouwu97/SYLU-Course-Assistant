@@ -1,0 +1,24 @@
+{
+  "tab": "体育分项",
+  "interval_min": 8,
+  "interval_max": 14,
+  "dry_run": false,
+  "targets": [
+    {
+      "course": "体育5",
+      "class_name": "羽毛球5-11",
+      "teacher": "",
+      "time": "",
+      "place": "",
+      "priority": 1
+    },
+    {
+      "course": "体育5",
+      "class_name": "羽毛球5-8",
+      "teacher": "",
+      "time": "",
+      "place": "",
+      "priority": 2
+    }
+  ]
+}
