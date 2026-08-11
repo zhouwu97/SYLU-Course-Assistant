@@ -14,12 +14,14 @@ import random
 from datetime import datetime, timezone
 
 from app.app_state import AppState
+from app.domain.course import CourseSection
 from app.domain.task import (
     COURSE_LEVEL_STATES,
     SECTION_LEVEL_STATES,
     EnrollmentState,
 )
 from app.services.ranking import decide
+from app.api.websocket import manager as ws_manager
 
 DEFAULT_INTERVAL = (8.0, 15.0)
 MIN_INTERVAL = 6.0
@@ -47,7 +49,14 @@ class Watcher:
         self._task: asyncio.Task | None = None
         self._stop = asyncio.Event()
         self._failed_sections: dict[str, set[str]] = {}  # intent_id -> {jxb_id}
+        self._pending_confirmations: dict[str, CourseSection] = {}  # intent_id -> section
         self._backoff = 0.0
+
+    # ---- 事件日志 + 实时推送 ----------------------------------------------
+
+    async def _log(self, intent_id: str, message: str, level: str = "info") -> None:
+        event = await self.state.db.add_event(intent_id, message, level)
+        await ws_manager.broadcast(event.to_dict())
 
     # ---- 生命周期 ---------------------------------------------------------
 
@@ -122,7 +131,7 @@ class Watcher:
 
         for keyword, group in group_queries_by_keyword(intents).items():
             sections = await adapter.list_sections(keyword, tab=_tab_for(group[0]))
-            await db.add_event("", f"更新教学班：{keyword}（{len(sections)} 个）", level="info")
+            await self._log("", f"更新教学班：{keyword}（{len(sections)} 个）", level="info")
             for intent in group:
                 await self._evaluate(intent, sections, my_schedule)
 
@@ -133,7 +142,7 @@ class Watcher:
         decision = decide(candidates, intent, my_schedule)
 
         if decision.action.value == "NO_ACTION":
-            await db.add_event(
+            await self._log(
                 intent.intent_id,
                 f"{decision.requested['activity']}：{decision.message}",
                 level="info",
@@ -141,7 +150,7 @@ class Watcher:
             return
 
         if decision.action.value == "NOTIFY":
-            await db.add_event(
+            await self._log(
                 intent.intent_id,
                 f"[提醒] {decision.message}",
                 level="success",
@@ -151,7 +160,9 @@ class Watcher:
             return
 
         if decision.action.value == "WAIT_CONFIRM":
-            await db.add_event(
+            # 模式 B：等用户确认（计划 §11）
+            self._pending_confirmations[intent.intent_id] = decision.selected_section
+            await self._log(
                 intent.intent_id,
                 f"[待确认] {decision.message}",
                 level="warn",
@@ -162,20 +173,20 @@ class Watcher:
 
         # AUTO_ENROLL（计划 §37：决策引擎选出的班才能提交）
         section = decision.selected_section
-        await db.add_event(
+        await self._log(
             intent.intent_id,
             f"[提交] 自动选择 {section.jxbmc}（{section.availability_text}）",
             level="warn",
         )
         result, state = await (await self.state.enrollment()).submit_decision(intent, section)
-        await db.add_event(intent.intent_id, f"[结果] {result.outcome.value}: {result.message}",
-                           level="success" if result.ok else "error")
+        await self._log(intent.intent_id, f"[结果] {result.outcome.value}: {result.message}",
+                        level="success" if result.ok else "error")
 
         if result.is_section_level:
             # 单班失败：标记不可用，重新排序找下一个（计划 §20）
             self._failed_sections.setdefault(intent.intent_id, set()).add(section.jxb_id)
             intent.state = EnrollmentState.WAITING
-            await db.add_event(
+            await self._log(
                 intent.intent_id,
                 f"{section.jxbmc} 标记不可用（{result.outcome.value}），继续候补",
                 level="warn",
@@ -184,7 +195,7 @@ class Watcher:
             intent.state = state
             if state == EnrollmentState.SESSION_EXPIRED:
                 self.pause()
-                await db.add_event(
+                await self._log(
                     intent.intent_id,
                     "登录已失效，自动候补已暂停，请重新登录",
                     level="error",
@@ -193,6 +204,34 @@ class Watcher:
             intent.state = state
         intent.updated_at = db_util_now()
         await db.upsert_intent(intent)
+
+    # ---- 模式 B：用户确认 / 放弃 ------------------------------------------
+
+    async def submit_pending(self, intent) -> CourseSection | None:
+        """用户确认后提交待确认教学班。返回提交的教学班，无待确认返回 None。"""
+        section = self._pending_confirmations.pop(intent.intent_id, None)
+        if section is None:
+            return None
+        result, state = await (await self.state.enrollment()).submit_decision(intent, section)
+        await self._log(intent.intent_id, f"[确认] 提交 {section.jxbmc} -> {result.outcome.value}: {result.message}",
+                        level="success" if result.ok else "error")
+        if result.is_section_level:
+            self._failed_sections.setdefault(intent.intent_id, set()).add(section.jxb_id)
+            intent.state = EnrollmentState.WAITING
+        elif state in COURSE_LEVEL_STATES:
+            intent.state = state
+        else:
+            intent.state = state
+        intent.updated_at = db_util_now()
+        await self.state.db.upsert_intent(intent)
+        return section
+
+    def decline_pending(self, intent_id: str) -> bool:
+        """用户放弃替代班，继续等首选。"""
+        if intent_id in self._pending_confirmations:
+            del self._pending_confirmations[intent_id]
+            return True
+        return False
 
 
 def _tab_for(intent) -> str:

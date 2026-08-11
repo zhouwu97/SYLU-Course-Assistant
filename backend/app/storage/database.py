@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS task_events (
     message    TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL DEFAULT ''
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_intent ON task_events(intent_id, ts);
 """
 
@@ -201,3 +206,20 @@ class Database:
                       level=r["level"], message=r["message"])
             for r in rows
         ]
+
+    # ---- app_settings -----------------------------------------------------
+
+    async def get_setting(self, key: str) -> str | None:
+        conn = await self._ensure_conn()
+        cur = await conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+        row = await cur.fetchone()
+        return row["value"] if row else None
+
+    async def set_setting(self, key: str, value: str) -> None:
+        conn = await self._ensure_conn()
+        await conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        await conn.commit()
