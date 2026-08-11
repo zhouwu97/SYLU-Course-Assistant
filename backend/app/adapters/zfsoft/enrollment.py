@@ -148,17 +148,17 @@ class ZfsoftAdapter:
     async def _query_xhr(self, keyword: str, course_hint: str) -> list[CourseSection]:
         """点击查询并捕获页面 JS 发起的列表接口 JSON。"""
         page = self._page
-            try:
-                async with page.expect_response(
-                    lambda r: LIST_URL_MARKER in r.url and "Index" not in r.url and r.request.method == "POST",
-                    timeout=8000,
-                ) as info:
-                    if not await self._click_query():
-                        return []
-            except Exception:
-                return []
+        try:
+            async with page.expect_response(
+                lambda r: LIST_URL_MARKER in r.url and "Index" not in r.url and r.request.method == "POST",
+                timeout=8000,
+            ) as info:
+                if not await self._click_query():
+                    return []
             resp = await info.value
             data = await resp.json()
+        except Exception:
+            return []
         items = data.get("items") or data.get("data") or data.get("rows") or []
         if isinstance(items, list):
             return parse_sections_from_items(items, course_hint=course_hint)

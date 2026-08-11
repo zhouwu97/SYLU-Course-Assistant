@@ -141,6 +141,9 @@ class CoursePreference:
         same_teacher = bool(self.preferred_teachers and section.teacher_name in self.preferred_teachers)
         same_time = any(t.overlaps(m) for t in self.preferred_times for m in section.meetings)
 
+        if same_teacher and same_time:
+            # 教师与首选时间都与首选一致（只是教学班不同）→ 最高替代层级
+            return TIER_SAME_TEACHER_OTHER_TIME
         if same_teacher and not same_time:
             return TIER_SAME_TEACHER_OTHER_TIME
         if same_time and not same_teacher:
