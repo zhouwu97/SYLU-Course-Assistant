@@ -29,14 +29,14 @@ async def _scenario(tmp_path, body, fn):
     state = AppState(db_path=str(tmp_path / "ws.db"), adapter=FakeAdapter())
     await state.init()
     app = create_app(state)
-    watcher = Watcher(state)
-    await watcher.start()
-    app.state.watcher = watcher
     try:
         with TestClient(app) as tc:
-            await fn(tc, state, watcher, body)
+            # lifespan 已创建并启动 watcher；从 app.state 取同一个实例
+            await fn(tc, state, app.state.watcher, body)
     finally:
-        await watcher.stop()
+        watcher = app.state.watcher
+        if watcher is not None:
+            await watcher.stop()
         await state.close()
 
 
@@ -53,7 +53,8 @@ class TestWebSocket:
     def test_ws_receives_events(self, tmp_path):
         async def fn(tc, state, watcher, body):
             with tc.websocket_connect("/api/ws") as ws:
-                await _create_intent(tc)  # 触发事件 -> 广播
+                iid = await _create_intent(tc)
+                tc.post(f"/api/intents/{iid}/start")  # start 会写事件并广播
                 got = ws.receive_json()
                 assert got["type"] == "event"
 

@@ -48,7 +48,10 @@ async def engine_pause(request: Request) -> dict:
     if watcher is not None:
         watcher.pause()
     state = request.app.state.app_state
-    await state.db.add_event("", "全部任务已暂停", level="warn")
+    from app.api.websocket import manager as ws_manager
+
+    event = await state.db.add_event("", "全部任务已暂停", level="warn")
+    await ws_manager.broadcast(event.to_dict())
     return {"paused": True}
 
 
@@ -58,5 +61,8 @@ async def engine_resume(request: Request) -> dict:
     if watcher is not None:
         watcher.resume()
     state = request.app.state.app_state
-    await state.db.add_event("", "全部任务已恢复", level="success")
+    from app.api.websocket import manager as ws_manager
+
+    event = await state.db.add_event("", "全部任务已恢复", level="success")
+    await ws_manager.broadcast(event.to_dict())
     return {"paused": False}
